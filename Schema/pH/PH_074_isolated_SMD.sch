@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!DOCTYPE eagle SYSTEM "eagle.dtd">
-<eagle version="6.4">
+<eagle version="6.6.0">
 <drawing>
 <settings>
 <setting alwaysvectorfont="no"/>
@@ -5928,8 +5928,8 @@ high speed (Philips)</description>
 <part name="RJ" library="RJ11" deviceset="14867" device="" value=""/>
 <part name="IC1" library="linear" deviceset="TL074" device="D"/>
 <part name="R9" library="rcl" deviceset="R-EU_" device="R0805W" value="150k"/>
-<part name="C3" library="rcl" deviceset="C-EU" device="C0805" value="0.01uF"/>
-<part name="C4" library="rcl" deviceset="C-EU" device="C0805" value="0.01uF"/>
+<part name="C3" library="rcl" deviceset="C-EU" device="C0805" value="3.3pF"/>
+<part name="C4" library="rcl" deviceset="C-EU" device="C0805" value="150pF"/>
 <part name="GND5" library="supply1" deviceset="GND" device=""/>
 <part name="GND6" library="supply1" deviceset="GND" device=""/>
 <part name="GND8" library="supply1" deviceset="GND" device=""/>
