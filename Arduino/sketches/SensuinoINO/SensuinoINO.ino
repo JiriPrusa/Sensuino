@@ -1,15 +1,33 @@
-#include <avr/interrupt.h>
+//strtok(), strcmp(), and atoi() 
+
 #include <DS1307RTC.h> 
-#include <DHT.h>
 #include <EEPROM.h>
 #include <Time.h>  
-#include <NewPing.h>
 #include <Wire.h>
 #include <SdFat.h>
 #include "EEPROMAnything.h"
-#include "avr_bmp.h"
 #include <OneWire.h>
-#include <PString.h>
+//#include <PString.h>
+#include <Streaming.h>
+
+#define MAXTIMINGS 85
+#define DHT11 11
+#define DHT22 22
+
+#define MAX_SENSOR_DISTANCE 500 // Maximum sensor distance can be as high as 500cm, no reason to wait for ping longer than sound takes to travel this distance and back.
+#define US_ROUNDTRIP_IN 146     // Microseconds (uS) it takes sound to travel round-trip 1 inch (2 inches total), uses integer to save compiled code space.
+#define US_ROUNDTRIP_CM 57      // Microseconds (uS) it takes sound to travel round-trip 1cm (2cm total), uses integer to save compiled code space.
+
+// Probably shoudln't change these values unless you really know what you're doing.
+#define NO_ECHO 0               // Value returned if there's no ping echo within the specified MAX_SENSOR_DISTANCE or max_cm_distance.
+#define MAX_SENSOR_DELAY 18000  // Maximum uS it takes for sensor to start the ping (SRF06 is the highest measured, just under 18ms).
+#define ECHO_TIMER_FREQ 24      // Frequency to check for a ping echo (every 24uS is about 0.4cm accuracy).
+#define PING_MEDIAN_DELAY 29    // Millisecond delay between pings in the ping_median method.
+
+// Conversion from uS to distance (round result to nearest cm or inch).
+#define NewPingConvert(echoTime, conversionFactor) (max((echoTime + conversionFactor / 2) / conversionFactor, (echoTime ? 1 : 0)))
+
+#define TIME_MSG_LEN  11 
 
 #define MENU_NORMAL	0
 #define MENU_HIGHLIGHT 1
@@ -19,12 +37,12 @@
 #define SPI_MOSI PORTB3
 #define SPI_SCK PORTB5
 #define LCD_DC  PORTB2
-#define LCD_BL  PORTD7	
-#define SPI_CS  PORTB2
+
+#define SPI_CS  PORTB1   //old versio B0
 #define SPI_CS_PORT  PORTB
 #define SPI_CS_DDR  DDRB
 #define LCD_RST PORTB4
-#define SPI_SS  PORTB2
+#define SPI_SS  PORTB1   //old version B0
 #define USE_GRAPHIC
 #define USE_BITMAP
 
@@ -62,26 +80,26 @@
 #define ECINDEX 4
 
 ///////////////////////////////////BUTTONS///////////////////////////////////////
-#define Buttons A2
-#define SD_CS 10
+#define Buttons A3
+#define SD_CS 8  //old version
 #define CE_PIN A3  
 #define IO_PIN  A4    
 #define SCLK_PIN A5
 /////////////////////////////////////////////////////////////////////////////////
 //////////////////////////////////PINS///////////////////////////////////////////
-#define ANpin1 A3
+#define ANpin1 A0
 #define ANpin2 A1
-#define ANpin3 A0
+#define ANpin3 A2
 #define SEpin_A A4
 #define SEpin_B A5
 #define DIGpin1_A 0
 #define DIGpin1_B 1
-#define DIGpin2_A 3
-#define DIGpin2_B 4
-#define DIGpin3_A 7
-#define DIGpin3_B 6
-#define DIGpin4_A 9
-#define DIGpin4_B 8
+#define DIGpin2_A 2
+#define DIGpin2_B 5
+#define DIGpin3_A 3
+#define DIGpin3_B 4
+#define DIGpin4_A 6
+#define DIGpin4_B 7
 /////////////////////////////////////////////////////////////////////////////////
 #define KeyUp    30
 #define KeyDown  40
@@ -89,7 +107,7 @@
 #define KeyBack  60
 #define KeyInv   70 //invalid key value
 
-#define AnalogMenuLength 5
+#define AnalogMenuLength 4
 #define DigitalMenuLength 7
 #define MainMenuLength 5
 #define ConectMenuLength 4
@@ -195,7 +213,11 @@ static const unsigned char smallFont[] PROGMEM =
       0x44, 0x28, 0x10, 0x28, 0x44 ,   // x
       0x0C, 0x50, 0x50, 0x50, 0x3C ,   // y
       0x44, 0x64, 0x54, 0x4C, 0x44 ,   // z
-      0x00, 0x06, 0x09, 0x09, 0x06     // Degree symbol
+      0x00, 0x06, 0x09, 0x09, 0x06 ,  // Degree symbol
+      0x7C, 0x42, 0x41, 0x41, 0x7F // SD card symbol 
+      // 0x03, 0x03, 0x7E, 0x42, 0x66 // Degree of celsius
+      // 0xEE, 0x26, 0x40, 0x2E, 0xE6  //ppm
+       
 };
 
 prog_char string_0[] PROGMEM =    "CONECTION";  
@@ -215,7 +237,7 @@ prog_char string_13[] PROGMEM =   "DHT11";  //14
 prog_char string_14[] PROGMEM =   "DHT22";  //15
 prog_char string_15[] PROGMEM =   "EC";
 prog_char string_16[] PROGMEM =   "Ultra sonic"; //17
-prog_char string_17[] PROGMEM =   "Soil Digit"; //17
+prog_char string_17[] PROGMEM =   "Water Temp"; //17
 prog_char string_18[] PROGMEM =   "pH"; //17
 prog_char string_19[] PROGMEM =   "CO2"; //17
 prog_char string_20[] PROGMEM =   "DS1307"; //17
@@ -255,7 +277,7 @@ PROGMEM const char *AnalogMenuTable[] = {
  string_30, // N/A
  string_6, // pH
  string_19, // CO2
- string_17 //soil moisture
+// string_17 //soil moisture
 };
 
 PROGMEM const char *DigitalMenuTable[] = {
@@ -265,7 +287,7 @@ PROGMEM const char *DigitalMenuTable[] = {
  string_14, // "DHT22"
  string_15, // "EC"
  string_16, // "distance"
- string_17, // "soil moisture"
+ string_17 // "water temp"
 };
 
 PROGMEM const char *I2CMenuTable[] = {
@@ -312,8 +334,6 @@ uint8_t digitalPINS[4][2]={
 
 uint8_t analogPINS[3]={ANpin1,ANpin2,ANpin3};
 
-int BH1750address = 0x23;
-
 ///////////////////////////////VALUE BUFFERS/////////////////////////////////////
 char A1val[9];
 char A2val[9];
@@ -349,10 +369,7 @@ byte I2CTypeArray[2];
 
 unsigned long delayTime; //Time before the main loop run again
 
-volatile boolean outputFormat; //0 LCD; 1 SD card
-volatile boolean showStatus; //0 MainMenu; 1 Display values
-
-volatile unsigned long bounceTime=0;
+boolean showStatus; //0 MainMenu; 1 Display values
 
 boolean returning; 
 uint8_t level;
@@ -363,19 +380,42 @@ uint8_t offset;
 uint8_t delayReadable;
 uint8_t delayType;
 
+char endLine='\n';
+
 unsigned char cursor_row; /* 0-5 */
 unsigned char cursor_col; /* 0-83 */
 
 boolean firstRun;
+boolean SDwrite;
+boolean serialStatus;
+boolean conected;
 
 SdFat sd; 
 SdFile file;
+
+time_t pctime;
+
+//ping library
+uint8_t _triggerBit;
+uint8_t _echoBit;
+volatile uint8_t *_triggerOutput;
+volatile uint8_t *_triggerMode;
+volatile uint8_t *_echoInput;
+unsigned int _maxEchoTime;
+unsigned long _max_time;
+
+//DHT library
+uint8_t data[6];
+uint8_t _type, _count;
+
+
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 ///////////////////////////////////////////////SETUP///////////////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 void setup()                    // run once, when the sketch starts
 {
-outputFormat=checkStatus();
+
 /* Read values stored in EEPROM*/
 EEPROM_readAnything(170, analogTypeArray);
 EEPROM_readAnything(180, digitalTypeArray);
@@ -389,17 +429,11 @@ if(timeStatus()!= timeSet) RTC.set(now()); // Get RTC run if it is not running
 
 assignDelay(); //classifed delat and assign as s/min/hr
 
-if(outputFormat){
-  /*SD card initialization*/
-pinMode(SD_CS, OUTPUT);
-sd.begin(SD_CS, SPI_HALF_SPEED);
-}else{
-  /*LCD initialization*/
-  LCDinit();
-  attachInterrupt(0,show, RISING); // Interrupt for Show/Hide menu button
-  }
+///pinMode(SD_CS, OUTPUT); //8 bytes in this :]
 
-Wire.begin();
+LCDinit();
+
+//Wire.begin();
 
 delay(1000);
 }
@@ -407,6 +441,7 @@ delay(1000);
 ///////////////////////////////////////////////////LOOP////////////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 void loop(){
+
 firstRun=false; //set firsRun false after get there after returnig from Menu
 
 /*Call of sensor reading function getValue(Value Buffer, PIN, Type of sensor)*/ 
@@ -421,74 +456,88 @@ getDigitalValue(&D4val[0], 3, digitalTypeArray[4]);
 
 getI2CValue(&I2Cval[0], SEpin_A, I2CTypeArray[1]);
 
-if(!outputFormat){
-if(showStatus) MainMenu();
-writeVal();
-}
-else{
- /*this will append readed values to BENCH.TXT file on SD card*/
- if(file.open("DATA.TXT", O_CREAT | O_APPEND | O_RDWR)){
- char space='\t';
- file.print(hour());
- file.print(':');
- file.print(minute());  
- file.print(space);
- file.print(D1val);
- file.print(space);
- file.print(D2val);
- file.print(space);
- file.print(D3val);
- file.print(space);
- file.print(D4val);
- file.print(space);
- file.print(A1val);
- file.print(space);
- file.print(A2val);
- file.print(space);
- file.print(A3val);
- file.print(space);
- file.println(I2Cval);
- file.sync();
- file.close();
+
+if(!serialStatus){
+  if(sd.begin(SD_CS, SPI_HALF_SPEED)){
+    if(file.open("DATA.TXT", O_CREAT | O_APPEND | O_RDWR)){
+    char space='\t';
+    //if(file.print(hour()))
+    file << now() << space << D2val << space << D3val << space << D4val << space << A1val << space << A2val << space << A3val << space << I2Cval << endLine ;
+    SDwrite=true;
+   // file.sync();
+    file.close();
+    }
+  }else SDwrite=false;
+}else{
+   if(conected) sendValues();
 }
 
-/*
-ofstream sdout("APPEND.TXT", ios::out | ios::app);
-sdout << "line ";
-sdout.close();
-*/
-}
-/*sequenced delay - so you wont wait longer then 1 sec if you want to show menu */
+
+writeVal();
+
 for(int i=0; i<(delayTime/1000); i++){
 if(firstRun) break;
 delay(1000);
-if(!outputFormat && showStatus) MainMenu();
+
+if((KeyScan()==KeyBack)&&!conected)
+{
+  showStatus=true;
+  MainMenu();
+}
+
+if(KeyScan()==KeySel)
+{
+  startSerial();
+}
+
 }
 
 } 
 ///////////////////////////////////////LOOP END//////////////////////////////////////////////////////////////////////////////////////
+void startSerial(){
+  serialStatus=!serialStatus;
+gotoXY( 43,5 ); 
+  if(serialStatus){
+Serial.begin(9600);
+writeChar('S');
+}else{
+Serial.end();
+conected=false;
+writeChar(' ');
+}
+  
+while(KeyScan()==KeySel){
+delay(100);
+}
+
+}
+
+void sendValues(){
+Serial.write('V');
+//Serial.println(D1val);
+Serial << D2val << endLine << D3val << endLine << D4val << endLine << A1val << endLine << A2val << endLine << A3val << endLine << I2Cval << endLine;
+sendTime();
+}
 
 void writeVal(){
 /*Print value buffers on LCD*/
  clear();
- gotoXY( 0,0 );
- writeString(A3val);
- gotoXY( 0,1 );
- writeString(A2val);
- gotoXY( 0,2 );
- writeString(A1val);
- gotoXY( 0,3 );
- writeString(I2Cval);
- gotoXY( 0,4 );
-  
- gotoXY( RIGHT_COLUM,0 );
- writeString(D4val);
- gotoXY( RIGHT_COLUM,1 );
- writeString(D3val);
- gotoXY( RIGHT_COLUM,2 );
- writeString(D2val);
- gotoXY( RIGHT_COLUM,3 );
- writeString(D1val);
+ printAtLCD(A3val, 0,0 );
+
+ printAtLCD(A2val, 0,1 );
+
+ printAtLCD(A1val, 0,2 );
+
+ printAtLCD(I2Cval, 0,3 );
+ 
+ printAtLCD(D4val, RIGHT_COLUM,0 ); 
+
+ printAtLCD(D3val, RIGHT_COLUM,1 ); 
+ 
+ printAtLCD(D2val, RIGHT_COLUM,2 ); 
+ 
+ printAtLCD(D1val, RIGHT_COLUM,3 ); 
+
 
 /*Print delay*/ 
 PrintLCD_P(3, 0, 4,MainMenuTable);
@@ -511,24 +560,23 @@ printNumber(minute());
 }else printNumber(minute());
 
 gotoXY( 43,5 );
+if(serialStatus){
+writeChar('S');
+} else{
+if(SDwrite) writeChar(124);
+else writeChar(' ');
+}
+
+
+/*
 printNumber(day());
 writeChar('.');
 printNumber(month());
 writeChar('.');
-/*
+
 gotoXY( 50,4 );
 printNumber(year()-(year()/1000)*1000);       
 */
-}
-
-/*function called after Show/Hide menu button interrupt*/
-void show(){
-if (abs(millis() - bounceTime) > BOUNCE_DURATION)  
-{
-showStatus=true;
-clear(); 
-bounceTime = millis();  // set whatever bounce time in ms is appropriate
- }
 }
 
 char val[]="N/A";
@@ -540,7 +588,8 @@ case 2: readDHT(where, digitalPin, DHT11); break;
 case 3: readDHT(where, digitalPin, DHT22); break;
 case 4: readEC(where, digitalPin); break;
 case 5: readSR04(where, digitalPin);break;
-case 6: readSoilHumDig(where, digitalPin);break;
+case 6: readDS18B20(where, digitalPINS[digitalPin][0]); break;
+//case 6: readSoilHumDig(where, digitalPin);break;
 }
 }
 
@@ -549,14 +598,14 @@ switch(type){
 case 1: strcpy(where, val);  break;
 case 2: readPH(where, pin); break;
 case 3: readCO2(where, pin); break;
-case 4: readSoilHumidityAnal(where, pin); break;
+//case 4: readSoilHumidityAnal(where, pin); break;
 }
 }
 
 void getI2CValue(char *where, uint8_t pin, byte type){
 switch(type){
 case 1: strcpy(where, val);  break;
-case 2: BH1750read(where, BH1750address); break; 
+case 2: BH1750read(where,  0x23); break; 
 case 3: strcpy(where, "time");  break; 
 }
 }
@@ -571,12 +620,17 @@ returning=true;
 delay(500);
 };
 
+//boolean backButtonReleased;
 void MainMenu(){
-detachInterrupt(0); 
+clear();
+while(KeyScan()==KeyBack){
+delay(100);
+}
 level=0;
 do{
 switch(makeMenu(MainMenuTable, MainMenuLength,1 )){
-case 0: clear(); attachInterrupt(0,show, RISING); showStatus=false; break;
+
+case 0: clear(); showStatus=false; break;
 case 1: ConectMenu(); break;
 case 2: CalibMenu(); break;
 case 3: DelayMenu(); break;
@@ -584,7 +638,8 @@ case 4: SetTimeMenu(); break;
 }
 returning=false;
 }while(showStatus);
-firstRun=true;
+//triggered when leaving menu
+firstRun=true;  
 }
 
 void ConectMenu(){
@@ -813,7 +868,7 @@ void DelayMenu(){
           if (newDelay > upLimit){
            newDelay=DownLimit;
            
-           if(!(delayType==2)) delayType+=1;
+           if(!(delayType==1)) delayType+=1;
           }
           else newDelay++;
           break;
@@ -822,7 +877,7 @@ void DelayMenu(){
        switch(delayType){
        case 0: delayTime=newDelay*1000;break;
        case 1: delayTime=newDelay*MICROSINMINUTE;break;
-       case 2: delayTime=newDelay*MICROSINHOUR; break;
+      // case 2: delayTime=newDelay*MICROSINHOUR; break;
        }
       assignDelay(); 
       EEPROM_writeAnything(200, delayTime);
@@ -956,25 +1011,27 @@ EEPROM_writeAnything(which*8, a);
 EEPROM_writeAnything(which*8+4, b);
 }
 
+void setDelayTime(unsigned long newDelay){
+delayTime=newDelay;
+assignDelay(); 
+EEPROM_writeAnything(200, delayTime);
+}
 ////////////////////////BUTTON HANDLE FUNCTIONS//////////////////////////////////
 char KeyScan() {
    int which, which2, diff,retVal;
    which = analogRead(Buttons);
-   ////Serial.println(which);
    delay(15);
    which2 = analogRead(Buttons);
    retVal = KeyInv;
-   
-   if(digitalRead(MenuHideButton)) retVal=KeyBack;
-   else{
+     
      diff = abs(which - which2);
       if (diff < 12) {
-      if (which > 850 && which < 1024) retVal =  KeySel;
-      if (which > 250  && which < 410) retVal =  KeyDown;
-      if (which > 430 && which < 570) retVal =  KeyUp;
+      if (which > 10 && which < 300) retVal =  KeyUp;
+      if (which > 300  && which < 600) retVal =  KeyDown;
+      if (which > 600 && which < 900) retVal =  KeySel;
+      if (which > 900 && which < 1030) retVal =  KeyBack;
    }
-   }
-  ////Serial.println(retVal);
+
    return retVal;
 }
 
@@ -1010,7 +1067,7 @@ printNumber(inInt);
 
 void LCDinit(){
     DDRB |= (1<<LCD_DC)|(1<<LCD_RST)|(1<<SPI_MOSI)|(1<<SPI_SCK)|(1<<SPI_SS);
-    DDRD |= (1<<LCD_BL);
+
     SPI_CS_DDR |= (1<<SPI_CS);
     //
     // even if we don't use SPI_SS for enabling the SPI device it must be high whilst
@@ -1021,12 +1078,13 @@ void LCDinit(){
     PORTB |= (1<<SPI_SS);
     LCDDISABLE;
     PORTB &= ~(1<<LCD_RST);
+  
   	
-    delayMicroseconds(1);
+   delayMicroseconds(1);
 
     PORTB |= (1<<LCD_RST);  
     SPI_INIT;   			// enable SPI master, fosc/16 = 1MH
-    PORTD |= (1<<LCD_BL);  	// turn on backlight
+   
 
     writeCommand(0x21);		// LCD Extended Commands
     //writeCommand(0xe0); 	// Set LCD Vop (Contrast)
@@ -1082,8 +1140,8 @@ void clearLine(uint8_t line) {
 }
 
 void gotoXY(unsigned char x, unsigned char y) {
-      if (x > LCDCOLMAX - 1) x = LCDCOLMAX - 1 ; // ensure within limits
-      if (y > LCDROWMAX - 1) y = LCDROWMAX - 1 ; // ensure within limits
+//      if (x > LCDCOLMAX - 1) x = LCDCOLMAX - 1 ; // ensure within limits
+//      if (y > LCDROWMAX - 1) y = LCDROWMAX - 1 ; // ensure within limits
 
 	writeCommand (0x80 | x);   //column
 	writeCommand (0x40 | y);   //row
@@ -1146,11 +1204,13 @@ void printNumber(unsigned long n) {
 
 ////////////////////////////SENSOR READING FUNCTIONS/////////////////////////////
 void readDHT(char* where, uint8_t digitalPin, uint8_t type){
-DHT dht(digitalPINS[digitalPin][1], type);
-dht.begin();
-strcpy(where, dtostrf(dht.readTemperature(),1,1,tmp));
+initDHT(digitalPINS[digitalPin][1],digitalPINS[digitalPin][0] , type);
+if (read()) {
+strcpy(where, dtostrf(readTemperature(),1,1,tmp));
 strcat(where,"/");
-strcat(where, dtostrf(dht.readHumidity(),1,0,tmp));
+strcat(where, dtostrf(readHumidity(),1,0,tmp));
+}else strcpy(where, "0/0");
+
 }
 
 void readEC(char *where, uint8_t digitalPin){
@@ -1171,21 +1231,23 @@ else strcat(where,dtostrf(ECf,1,1,tmp));
 
 unsigned long getFrequency(uint8_t enable_pin, uint8_t pin) {
 
-pinMode(enable_pin, OUTPUT);
-pinMode(pin, INPUT);
-
+initPins(enable_pin, pin );
 unsigned long freqhigh = 0;
 unsigned long freqlow =0;
 unsigned long frequency=0;
-digitalWrite(enable_pin, HIGH);
-if(pulseIn(pin, HIGH, 3000)){
+
+_maxEchoTime=2000;
+*_triggerMode |= _triggerBit; // set trigger pin as output
+*_triggerOutput |= _triggerBit; // Set trigger pin high
+
+//if(highDuration()>_maxEchoTime){
 for(unsigned int j=0; j<FREQSAMPLES; j++){
-freqhigh+= pulseIn(pin, HIGH);
-freqlow+= pulseIn(pin, LOW);
+freqhigh+= highDuration();
+freqlow+= lowDuration();
 }
 frequency=100000/((freqhigh + freqlow)/ FREQSAMPLES);
-}
-digitalWrite(enable_pin, LOW);
+//} else frequency=0;
+*_triggerOutput &= ~_triggerBit; // Set the trigger pin low
 
 return frequency;
 }
@@ -1196,6 +1258,7 @@ float constantB;
 float pH;
 EEPROM_readAnything(pin*8, constantA); 
 EEPROM_readAnything(pin*8+4, constantB);
+
 strcpy(where,"pH:");
 pH=(PHclear(pin)/constantA)+constantB;
 if(pH>14 || pH<0) strcat(where, "cal");
@@ -1203,17 +1266,19 @@ else strcat(where,dtostrf(pH,1,1,tmp));
 }
 
 void readDS18B20(char *where, uint8_t pin){
+
 OneWire ds(pin); 
 int HighByte, LowByte, TReading, SignBit, Tc_100, Whole, Fract;
   byte i;
   byte present = 0;
   byte data[12];
   byte addr[8];
-    if ( !ds.search(addr)) {
+ /*  if ( !ds.search(addr)) {
    //   Serial.print("No more addresses.\n");
       ds.reset_search();
       return;
   }
+  
   
   ds.reset();
   ds.select(addr);
@@ -1222,44 +1287,66 @@ int HighByte, LowByte, TReading, SignBit, Tc_100, Whole, Fract;
   delay(1000);     // maybe 750ms is enough, maybe not
   // we might do a ds.depower() here, but the reset will take care of it.
 
-  present = ds.reset();
+   present =ds.reset();
   ds.select(addr);    
   ds.write(0xBE);         // Read Scratchpad
 
+*/
+  //Reset, skip ROM and start temperature conversion
+  
+  ds.reset();
+  ds.write(0xcc); //SKIPROM
+  ds.write(0x44); //CONVERTTEMP
+  //Wait until conversion is complete
+  delay(1000); //  while(!ds.read_bit());
+  //Reset, skip ROM and send command to read Scratchpad
+  ds.reset();
+  ds.write(0xcc); //SKIPROM
+  ds.write(0xBE); //RSCRATCHPAD
 
   for ( i = 0; i < 9; i++) {           // we need 9 bytes
     data[i] = ds.read();
   }
-    
+
+  byte MSB = data[1];
+  byte LSB = data[0];
+
+  float tempRead = ((MSB << 8) | LSB); //using two's compliment
+ tempRead/=16;
+ strcpy(where,dtostrf(tempRead,1,1,tmp));
+  
+ 
+  /*  
   LowByte = data[0];
   HighByte = data[1];
   TReading = (HighByte << 8) + LowByte;
   SignBit = TReading & 0x8000;  // test most sig bit
-  if (SignBit) // negative
-  {
-    TReading = (TReading ^ 0xffff) + 1; // 2's comp
-  }
+ // if (SignBit) // negative
+ // {
+//    TReading = (TReading ^ 0xffff) + 1; // 2's comp
+ // }
   Tc_100 = (6 * TReading) + TReading / 4;    // multiply by (100 * 0.0625) or 6.25
 
   Whole = Tc_100 / 100;  // separate off the whole and fractional portions
   Fract = Tc_100 % 100;
 
 
-  if (SignBit) // If its negative
-  {
-    // Serial.print("-");
-  }
+//  if (SignBit) // If its negative
+//  {
+//    // Serial.print("-");
+//    strcpy(where,"-");
+//  }
+   strcpy(where,dtostrf(Whole,1,0,tmp));
+   strcat(where,".");
   //Serial.print(Whole);
   //Serial.print(".");
   if (Fract < 10)
   {
-    // Serial.print("0");
+   strcat(where,"0"); // Serial.print("0");
   }
+  strcat(where,dtostrf(Fract,1,0,tmp));
   //Serial.print(Fract);
-
-  
-  
-  
+*/
 }
 
 
@@ -1278,41 +1365,35 @@ return analogRead(analogPINS[pin]);
 }
 
 void readSR04(char *where, uint8_t digitalPin){
-pinMode(digitalPINS[digitalPin][0],INPUT);
-pinMode(digitalPINS[digitalPin][1],OUTPUT);
-NewPing sonar(digitalPINS[digitalPin][1], digitalPINS[digitalPin][0], MAX_DISTANCE); //
-unsigned int uS = sonar.ping();
+//pinMode(digitalPINS[digitalPin][0],INPUT);
+//pinMode(digitalPINS[digitalPin][1],OUTPUT);
+//NewPing sonar(digitalPINS[digitalPin][1], digitalPINS[digitalPin][0], MAX_DISTANCE); //
+initPing(digitalPINS[digitalPin][1], digitalPINS[digitalPin][0], MAX_DISTANCE);
+unsigned int uS = ping();
 strcpy(where,dtostrf((uS / US_ROUNDTRIP_CM),1,0,tmp));
 strcat(where," cm");
 }
 
 
-void readSoilHumDig(char *where, uint8_t digitalPin){
-  pinMode(digitalPINS[digitalPin][0],INPUT);
- // pinMode(digitalPINS[digitalPin][1],OUTPUT);
-//  digitalWrite(digitalPINS[digitalPin][1],HIGH);
-
-if (digitalRead(digitalPINS[digitalPin][0])) strcpy(where,"DRY");
-else strcpy(where,"WET");
-//digitalWrite(digitalPINS[digitalPin][1],LOW);
-}
-
 void readCO2(char *where, uint8_t pin){
 float value=((double)getVoltage(pin)*5000)/1024;
 strcpy(where,dtostrf(value,1,0,tmp));
+strcat(where,"ppm");
 }
 
-void readSoilHumidityAnal(char *where, uint8_t pin){
-strcpy(where,dtostrf(getVoltage(pin),1,0,tmp));
-}
+
 
 void BH1750read(char *where, int address){
 int i=0;
   byte buff[2];
   int val=0;
-BH1750_Init(address);
+//BH1750_Init(address);
+ Wire.beginTransmission(address);
+  Wire.write(0x10);//1lx reolution 120ms
+//  Wire.endTransmission();
+
  
-  Wire.beginTransmission(address);
+//  Wire.beginTransmission(address);
   Wire.requestFrom(address, 2);
   while(Wire.available()) //
   {
@@ -1324,36 +1405,24 @@ BH1750_Init(address);
   {
     val=((buff[0]<<8)|buff[1])/1.2;
    }
-PString(where, 9, val);
+//itoa(val,where, 10);
+strcpy(where, dtostrf(val,1,0,tmp));
 strcat(where," lx");
-}
- 
-void BH1750_Init(uint8_t address)
-{
-  Wire.beginTransmission(address);
-  Wire.write(0x10);//1lx reolution 120ms
-  Wire.endTransmission();
 }
 
 //////////////////////SUPPORT FUNCTIONS//////////////////////////////////////////
-boolean checkStatus(){
-return digitalRead(5);
-}
 
 char getDelayChar(){
 switch(delayType){
 case 0:return 's';
 case 1:return 'm';
-case 2:return 'h';
+//case 2:return 'h';
 }
 }
 
 void assignDelay(){
-    if(!(delayTime%MICROSINHOUR)) {
-   delayReadable=delayTime/MICROSINHOUR;
-   delayType=2;
-   }
-   else {if (!(delayTime%MICROSINMINUTE)) {
+  
+   if (!(delayTime%MICROSINMINUTE)) {
             delayReadable=delayTime/MICROSINMINUTE;
              delayType=1;
        }
@@ -1361,7 +1430,376 @@ void assignDelay(){
      delayReadable=delayTime/1000;
              delayType=0;
            }
-         }  
+           
+}
+
+
+	
+		//boolean ping_wait_timer();
+		
+		//static void timer_setup();
+		//static void timer_ms_cntdwn();
+
+void initPing(uint8_t trigger_pin, uint8_t echo_pin, int max_cm_distance) {
+	initPins(trigger_pin, echo_pin);
+
+	_maxEchoTime = min(max_cm_distance, MAX_SENSOR_DISTANCE) * US_ROUNDTRIP_CM + (US_ROUNDTRIP_CM / 2); // Calculate the maximum distance in uS.
+
+
+	*_triggerMode |= _triggerBit; // Set trigger pin to output.
+
+}
+
+void initPins (uint8_t trigger_pin, uint8_t echo_pin){
+        _triggerBit = digitalPinToBitMask(trigger_pin); // Get the port register bitmask for the trigger pin.
+	_echoBit = digitalPinToBitMask(echo_pin);       // Get the port register bitmask for the echo pin.
+
+	_triggerOutput = portOutputRegister(digitalPinToPort(trigger_pin)); // Get the output port register for the trigger pin.
+	_echoInput = portInputRegister(digitalPinToPort(echo_pin));         // Get the input port register for the echo pin.
+
+	_triggerMode = (uint8_t *) portModeRegister(digitalPinToPort(trigger_pin)); // Get the port mode register for the trigger pin.
+}
+
+//Calculate duration of HIGH pulse
+unsigned int ping() {
+        *_triggerOutput &= ~_triggerBit; // Set the trigger pin low, should already be low, but this will make sure it is.
+	delayMicroseconds(4);            // Wait for pin to go low, testing shows it needs 4uS to work every time.
+	*_triggerOutput |= _triggerBit;  // Set trigger pin high, this tells the sensor to send out a ping.
+	delayMicroseconds(10);           // Wait long enough for the sensor to realize the trigger pin is high. Sensor specs say to wait 10uS.
+	*_triggerOutput &= ~_triggerBit; // Set trigger pin back to low. 
+	return highDuration();
+}
+
+unsigned int highDuration(){
+ if (!highStarted()) return NO_ECHO;                // Trigger a ping, if it returns false, return NO_ECHO to the calling function.
+while (*_echoInput & _echoBit)                      // Wait for the ping echo.
+		if (micros() > _max_time) return NO_ECHO;       // Stop the loop and return NO_ECHO (false) if we're beyond the set maximum distance.
+return (micros() - (_max_time - _maxEchoTime) - 5); // Calculate ping time, 5uS of overhead.
+}
+
+unsigned int lowDuration(){
+   if (!lowStarted()) return NO_ECHO;   
+while (!(*_echoInput & _echoBit))                      // Wait for the ping echo.
+		if (micros() > _max_time) return NO_ECHO;       // Stop the loop and return NO_ECHO (false) if we're beyond the set maximum distance.
+return (micros() - (_max_time - _maxEchoTime) - 5); // Calculate ping time, 5uS of overhead.
+}
+
+
+boolean highStarted() {
+	_max_time =  micros() + MAX_SENSOR_DELAY;                  // Set a timeout for the ping to trigger.
+	while (*_echoInput & _echoBit && micros() <= _max_time) {} // Wait for echo pin to clear.
+	while (!(*_echoInput & _echoBit))                          // Wait for ping to start.
+		if (micros() > _max_time) return false;                // Something went wrong, abort.
+	_max_time = micros() + _maxEchoTime; // Ping started, set the timeout.
+	return true;                         // Ping started successfully.
+}
+
+boolean lowStarted() {
+	_max_time =  micros() + MAX_SENSOR_DELAY;                  // Set a timeout for the ping to trigger.
+	while (!(*_echoInput & _echoBit) && micros() <= _max_time) {} // Wait for echo pin to clear.
+	while (*_echoInput & _echoBit)                          // Wait for ping to start.
+		if (micros() > _max_time) return false;                // Something went wrong, abort.
+	_max_time = micros() + _maxEchoTime; // Ping started, set the timeout.
+	return true;                         // Ping started successfully.
+}
+
+
+void initDHT(uint8_t trigPin, uint8_t echoPin, uint8_t type) {
+initPins(trigPin,echoPin);
+  _type = type;
+  _count = 15;
+
+}
+/*
+void beginDHT() {
+  // set up the pins!
+  pinMode(_pin, INPUT);
+  digitalWrite(_pin, HIGH);
+
+}
+*/
+
+float readTemperature() {
+  float f;
+
+ // if (read()) {
+    switch (_type) {
+    case DHT11:
+      f = data[2];
+    return f;
+    case DHT22:
+      f = data[2] & 0x7F;
+      f *= 256;
+      f += data[3];
+      f /= 10;
+      if (data[2] & 0x80)
+      f *= -1;
+
+      return f;
+    }
+ // }
+
+  return NAN;
+}
+
+float readHumidity() {
+  float f;
+ // if (read()) {
+    switch (_type) {
+    case DHT11:
+      f = data[0];
+      return f;
+    case DHT22:
+
+      f = data[0];
+      f *= 256;
+      f += data[1];
+      f /= 10;
+      return f;
+    }
+  //}
+  return NAN;
+}
+
+boolean read() {
+  uint8_t laststate = _triggerBit;
+  uint8_t counter = 0;
+  uint8_t j = 0, i;
+ 
+  *_triggerMode |= _triggerBit;
+  // pull the pin high and wait 250 milliseconds
+  *_triggerOutput |= _triggerBit;  // Set trigger pin high //digitalWrite(_pin, HIGH);
+  delay(250);
+
+  data[0] = data[1] = data[2] = data[3] = data[4] = 0;
+  
+  // now pull it low for ~20 milliseconds
+  //pinMode(_pin, OUTPUT);
+  *_triggerOutput &= ~_triggerBit; // Set the trigger pin low //digitalWrite(_pin, LOW);
+  delay(20);
+  cli();
+  *_triggerOutput |= _triggerBit;  // Set trigger pin high  //digitalWrite(_pin, HIGH);
+  delayMicroseconds(40);
+  *_triggerMode &= ~_triggerBit; //pinMode(_pin, INPUT);
+
+  // read in timings
+  for ( i=0; i< MAXTIMINGS; i++) {
+    counter = 0;
+    while ((*_echoInput & _triggerBit) == laststate) {
+      counter++;
+      delayMicroseconds(1);
+      if (counter == 255) {
+        break;
+      }
+    }
+   
+
+    laststate=(*_echoInput & _triggerBit);
+  
+  
+    if (counter == 255) break;
+
+    // ignore first 3 transitions
+    if ((i >= 4) && (i%2 == 0)) {
+      // shove each bit into the storage bytes
+      data[j/8] <<= 1;
+      if (counter > _count)
+        data[j/8] |= 1;
+      j++;
+    }
+
+  }
+
+  sei();
+  
+  // check we read 40 bits and that the checksum matches
+  if ((j >= 40) &&
+      (data[4] == ((data[0] + data[1] + data[2] + data[3]) & 0xFF)) ) {
+    return true;
+  }
+  
+
+  return false;
+
+}
+
+
+
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////SERIAL COMUNICATION/////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////////////////////////////////
+void sendAnalogType(){
+Serial << 'T';
+Serial << 'A';
+for(int i=1; i<4; i++){
+Serial << analogTypeArray[i] << endLine;
+}
+Serial << I2CTypeArray[1] << endLine;;
+//Serial.write('Z');
+}
+
+void sendDigitalType(){
+Serial << 'T';
+Serial << 'D';
+for(int i=1; i<5; i++){
+Serial << digitalTypeArray[i] << endLine;
+}
+//Serial.write('Z');
+}
+
+float constantA;
+float constantB;
+
+void sendPHConst(){
+Serial << 'C';
+Serial << 'P';
+for(int i=0; i<3; i++){
+EEPROM_readAnything(i*8, constantA); 
+EEPROM_readAnything(i*8+4, constantB);
+Serial << constantA << endLine;
+Serial << constantB << endLine;
+}
+}
+
+void sendECConst(){
+Serial << 'C';
+Serial << 'E';
+for(int i=1; i<4; i++){
+EEPROM_readAnything(i*8+24, constantA); 
+EEPROM_readAnything(i*8+28, constantB);
+Serial << constantA << endLine;
+Serial << constantB << endLine;
+}
+}
+
+void sendTime(){
+Serial << 'A';  
+Serial << now() << endLine;
+}
+
+void sendDelay(){
+Serial << 'D';  
+Serial << delayTime << endLine;
+}
+
+void serialEvent(){
+
+while (Serial.available() > 0){
+char inByte=Serial.read();
+
+/* 
+if((char)inByte=='A'){
+sendTime();
+}
+*/
+
+
+if((char)inByte=='B'){
+delay(500);
+int c;
+while(Serial.available()<TIME_MSG_LEN-1){
+delay(50);
+//Serial.println(Serial.available());
+}
+pctime = 0;
+for(int i=0; i < TIME_MSG_LEN-1; i++){  //TIME_MSG_LEN -1
+c = Serial.read();
+
+if( c >= 0 && c <= 9){ 
+pctime = (10 * pctime) + (c) ;// convert digits to a number  
+  }
+}  
+setTime(pctime);
+//Serial.println(pctime);
+}
+
+if((char)inByte=='D'){
+//unsigned long cislo=Serial.parseInt();
+//Serial.write('H'); 
+//Serial.println(cislo);
+setDelayTime(Serial.parseInt());
+sendDelay();
+}
+
+if((char)inByte=='Y'){
+Serial << 'Y';
+conected=true;
+sendAnalogType();
+sendDigitalType();
+sendPHConst();
+sendECConst();
+sendDelay();
+}
+
+if((char)inByte=='X'){
+conected=false;
+}
+
+
+if((char)inByte=='T'){
+while(Serial.available() < 3){}
+char director=(char)Serial.read();
+  if(director=='A'){  
+  analogTypeArray[Serial.read()]=Serial.read(); 
+  sendAnalogType();
+  EEPROM_writeAnything(170, analogTypeArray);
+}
+if(director=='D'){
+digitalTypeArray[Serial.read()]=Serial.read();
+sendDigitalType();  
+EEPROM_writeAnything(180, digitalTypeArray);
+}
+if(director=='I'){
+I2CTypeArray[Serial.read()]=Serial.read(); 
+sendAnalogType();
+EEPROM_writeAnything(190, I2CTypeArray);
+}  
+}
+
+
+if((char)inByte=='M'){
+delay(10);
+int pin=Serial.read();  
+clear();
+PrintLCD_P(2, 10, 3, MainMenuTable);
+do
+{
+Serial << 'M' << pin << getFrequency(digitalPINS[pin][0],digitalPINS[pin][1]) << endLine;
+delay(100);
+ 
+}while(!((char)Serial.read()=='W'));
+ 
+}
+
+if((char)inByte=='N'){
+delay(10);
+int pin=Serial.read();  
+clear();
+PrintLCD_P(2, 10, 3, MainMenuTable);
+do
+{
+Serial << 'N' << pin << PHclear(pin) << endLine;
+delay(100);
+ 
+}while(!((char)Serial.read()=='W'));
+ 
+}
+
+/*Incoming new EC constants*/
+if((char)inByte=='U'){
+delay(30);
+setECConstants(Serial.read(),Serial.parseFloat(),Serial.parseFloat());
+sendECConst();
+}
+
+/*Incoming new pH constants*/
+if((char)inByte=='V'){
+delay(30);
+setPHConstants(Serial.read(),Serial.parseFloat(),Serial.parseFloat());
+sendPHConst();
+}
+
+}
 }
 
 
