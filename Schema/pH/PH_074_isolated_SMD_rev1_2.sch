@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!DOCTYPE eagle SYSTEM "eagle.dtd">
-<eagle version="6.6.0">
+<eagle version="6.4">
 <drawing>
 <settings>
 <setting alwaysvectorfont="no"/>
@@ -1708,9 +1708,9 @@ Source: http://www.murata.com .. GRM43DR72E224KW01.pdf</description>
 <wire x1="0" y1="-0.508" x2="-0.889" y2="-1.397" width="0.127" layer="21"/>
 <circle x="0" y="0" radius="1.8034" width="0.127" layer="21"/>
 <circle x="0" y="0" radius="2.794" width="0.0508" layer="21"/>
-<pad name="1" x="-2.54" y="-5.08" drill="1.016" diameter="1.778" shape="octagon"/>
-<pad name="2" x="2.54" y="-5.08" drill="1.016" diameter="1.778" shape="octagon"/>
-<pad name="3" x="0" y="5.08" drill="1.016" diameter="1.778" shape="octagon"/>
+<pad name="1" x="-2.54" y="-5.08" drill="1.2" diameter="1.778" shape="octagon"/>
+<pad name="2" x="2.54" y="-5.08" drill="1.2" diameter="1.778" shape="octagon"/>
+<pad name="3" x="0" y="5.08" drill="1.2" diameter="1.778" shape="octagon"/>
 <text x="-3.175" y="6.35" size="1.27" layer="25" ratio="10">&gt;NAME</text>
 <text x="-3.048" y="-7.62" size="1.27" layer="27" ratio="10">&gt;VALUE</text>
 </package>
@@ -5532,14 +5532,14 @@ dual in line package'</description>
 <wire x1="-5.36" y1="3.45" x2="-5.36" y2="1.27" width="0.2032" layer="51"/>
 <wire x1="-5.36" y1="-1.27" x2="-5.36" y2="-3.45" width="0.2032" layer="51"/>
 <wire x1="-5.36" y1="1.27" x2="-5.36" y2="-1.27" width="0.2032" layer="51" curve="-180"/>
-<smd name="1" x="-3.81" y="-3.8" dx="1.2" dy="2.2" layer="1"/>
-<smd name="2" x="-1.27" y="-3.8" dx="1.2" dy="2.2" layer="1"/>
-<smd name="3" x="1.27" y="-3.8" dx="1.2" dy="2.2" layer="1"/>
-<smd name="4" x="3.81" y="-3.8" dx="1.2" dy="2.2" layer="1"/>
-<smd name="5" x="3.81" y="3.8" dx="1.2" dy="2.2" layer="1"/>
-<smd name="6" x="1.27" y="3.8" dx="1.2" dy="2.2" layer="1"/>
-<smd name="7" x="-1.27" y="3.8" dx="1.2" dy="2.2" layer="1"/>
-<smd name="8" x="-3.81" y="3.8" dx="1.2" dy="2.2" layer="1"/>
+<smd name="1" x="-3.81" y="-4.318" dx="1.2" dy="2.2" layer="1"/>
+<smd name="2" x="-1.27" y="-4.318" dx="1.2" dy="2.2" layer="1"/>
+<smd name="3" x="1.27" y="-4.318" dx="1.2" dy="2.2" layer="1"/>
+<smd name="4" x="3.81" y="-4.318" dx="1.2" dy="2.2" layer="1"/>
+<smd name="5" x="3.81" y="4.318" dx="1.2" dy="2.2" layer="1"/>
+<smd name="6" x="1.27" y="4.318" dx="1.2" dy="2.2" layer="1"/>
+<smd name="7" x="-1.27" y="4.318" dx="1.2" dy="2.2" layer="1"/>
+<smd name="8" x="-3.81" y="4.318" dx="1.2" dy="2.2" layer="1"/>
 <text x="-5.635" y="-3.1351" size="1.27" layer="25" rot="R90">&gt;NAME</text>
 <text x="6.905" y="-4.4051" size="1.27" layer="27" rot="R90">&gt;VALUE</text>
 <text x="-3.81" y="-2.54" size="1.27" layer="21">1</text>
