@@ -1236,7 +1236,7 @@ unsigned long freqhigh = 0;
 unsigned long freqlow =0;
 unsigned long frequency=0;
 
-_maxEchoTime=2000;
+_maxEchoTime=3000;
 *_triggerMode |= _triggerBit; // set trigger pin as output
 *_triggerOutput |= _triggerBit; // Set trigger pin high
 
